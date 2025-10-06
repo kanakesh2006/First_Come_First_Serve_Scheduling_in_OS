@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FCFS Scheduling Animation — Debugged</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <style>
+    :root{--scale-ms:700ms}
+    body{background:linear-gradient(180deg,#0f172a,#071030);color:#e6eef8}
+    .process-card{width:110px;height:70px;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 6px 18px rgba(2,6,23,.6)}
+    .ready-queue{min-height:110px;display:flex;gap:12px;align-items:center;position:relative}
+    .cpu{width:200px;height:120px;border-radius:12px;border:2px dashed rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;position:relative}
+    .cpu.glow{box-shadow:0 0 40px rgba(59,130,246,.6);border-color:rgba(59,130,246,.5)}
+    .gantt{height:56px;border-radius:6px;background:linear-gradient(90deg,#071032,#0b1224);display:flex;align-items:center;overflow:hidden;position:relative}
+    .gantt-track{display:flex;height:100%;align-items:center}
+    .gantt-block{height:70%;display:flex;align-items:center;justify-content:center;border-radius:6px;margin-right:4px;color:#021124;font-weight:700;padding:0 6px}
+    .timeline{height:30px;position:relative;margin-top:8px}
+    .time-marker{position:absolute;top:0;font-size:12px;color:#a8b3c7;transform:translateX(-50%)}
+    .metrics{background:rgba(255,255,255,.03);padding:12px;border-radius:8px}
+    .popup{position:absolute;top:-56px;left:50%;transform:translateX(-50%);background:rgba(2,6,23,.95);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.06);font-size:13px}
+    .no-select{user-select:none}
+  </style>
+</head>
+<body class="p-6 no-select">
+  <div class="max-w-5xl mx-auto">
+    <header class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-bold">First Come First Serve Scheduling</h1>
+        <p class="text-sm text-slate-300">Non-preemptive | Order of arrival determines execution order</p>
+      </div>
+      <div class="flex gap-2">
+        <button id="playBtn" class="px-4 py-2 bg-blue-600 rounded-lg shadow">Play</button>
+        <button id="pauseBtn" class="px-4 py-2 bg-yellow-500 rounded-lg shadow">Pause</button>
+        <button id="restartBtn" class="px-4 py-2 bg-rose-500 rounded-lg shadow">Restart</button>
+      </div>
+    </header>
+
+    <section class="grid grid-cols-3 gap-6">
+      <div class="col-span-3 md:col-span-2">
+        <div class="mb-4">
+          <h2 class="text-lg font-semibold">Ready Queue</h2>
+          <div id="readyZone" class="ready-queue mt-3 p-3 bg-slate-900/40 rounded-xl"></div>
+        </div>
+
+        <div class="flex items-center gap-8">
+          <div class="flex-1 flex flex-col items-center gap-3">
+            <div class="cpu" id="cpuBox">
+              <div id="cpuContent" class="text-slate-200">CPU</div>
+              <div id="cpuPopup" style="display:none;" class="popup"></div>
+            </div>
+            <div class="w-full mt-2">
+              <div class="h-3 bg-slate-800 rounded overflow-hidden">
+                <div id="cpuProgress" style="width:0%;height:100%;background:linear-gradient(90deg,#60a5fa,#3b82f6)"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex-1">
+            <h2 class="text-lg font-semibold">Gantt Chart</h2>
+            <div id="ganttArea" class="mt-3 p-3">
+              <div id="ganttBar" class="gantt">
+                <div id="ganttTrack" class="gantt-track"></div>
+              </div>
+              <div id="timeline" class="timeline">
+                <div id="timeMarkers"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="col-span-3 md:col-span-1">
+        <div class="metrics">
+          <h3 class="font-semibold">Processes</h3>
+          <div id="processList" class="mt-2 space-y-2"></div>
+          <hr class="my-3 border-slate-700" />
+          <h3 class="font-semibold">Metrics (live)</h3>
+          <div class="mt-2 text-sm space-y-1">
+            <div>Average TAT: <span id="avgTAT">-</span></div>
+            <div>Average WT: <span id="avgWT">-</span></div>
+            <div>Makespan: <span id="makespan">-</span></div>
+            <div>Throughput: <span id="throughput">-</span></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="mt-6">
+      <h3 class="font-semibold">Detailed Table</h3>
+      <div class="mt-3 bg-slate-900/40 p-3 rounded-xl">
+        <table class="w-full text-sm">
+          <thead class="text-slate-300 text-left">
+            <tr><th>Process</th><th>AT</th><th>BT</th><th>ST</th><th>CT</th><th>TAT</th><th>WT</th></tr>
+          </thead>
+          <tbody id="detailTable" class="text-slate-100"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const SCALE_MS = 700;
+    const PX_PER_UNIT = 40;
+
+    const processes = [
+      { id: 'P1', at: 0, bt: 5, color: '#93c5fd' },
+      { id: 'P2', at: 1, bt: 3, color: '#fca5a5' },
+      { id: 'P3', at: 2, bt: 8, color: '#fef08a' },
+      { id: 'P4', at: 3, bt: 6, color: '#86efac' }
+    ];
+
+    function computeSchedule(arr){
+      let ctPrev = 0;
+      return arr.map(p => {
+        const st = Math.max(p.at, ctPrev);
+        const ct = st + p.bt;
+        ctPrev = ct;
+        return {...p, st, ct, tat: ct - p.at, wt: (ct - p.at) - p.bt };
+      });
+    }
+
+    const scheduled = computeSchedule(processes);
+
+    document.addEventListener('DOMContentLoaded', ()=>{
+      const readyZone = document.getElementById('readyZone');
+      const processList = document.getElementById('processList');
+      const detailTable = document.getElementById('detailTable');
+      const ganttTrack = document.getElementById('ganttTrack');
+      const ganttBar = document.getElementById('ganttBar');
+      const timeMarkers = document.getElementById('timeMarkers');
+      const cpuBox = document.getElementById('cpuBox');
+      const cpuContent = document.getElementById('cpuContent');
+      const cpuProgress = document.getElementById('cpuProgress');
+      const cpuPopup = document.getElementById('cpuPopup');
+
+      const playBtn = document.getElementById('playBtn');
+      const pauseBtn = document.getElementById('pauseBtn');
+      const restartBtn = document.getElementById('restartBtn');
+
+      let mainTl = null;
+      let uiInitialized = false;
+
+      function safeGet(id){ return document.getElementById(id); }
+      function safeSetText(id, text){ const el = safeGet(id); if(el) el.textContent = text; }
+
+      function initUI(){
+        readyZone.innerHTML = '';
+        processList.innerHTML = '';
+        detailTable.innerHTML = '';
+        ganttTrack.innerHTML = '';
+        timeMarkers.innerHTML = '';
+
+        scheduled.forEach(p => {
+          const card = document.createElement('div');
+          card.className = 'process-card';
+          card.id = 'card-' + p.id;
+          card.style.background = p.color;
+          card.style.opacity = 0;
+          card.style.transition = 'opacity 0.25s';
+          card.innerHTML = `<div style="font-weight:700">${p.id}</div><div style="font-size:12px">AT:${p.at} BT:${p.bt}</div>`;
+          readyZone.appendChild(card);
+
+          const listItem = document.createElement('div');
+          listItem.innerHTML = `<div class="flex items-center gap-2"><div style="width:12px;height:12px;background:${p.color};border-radius:3px"></div><div>${p.id} — AT:${p.at} BT:${p.bt}</div></div>`;
+          processList.appendChild(listItem);
+
+          const row = document.createElement('tr');
+          row.innerHTML = `<td>${p.id}</td><td>${p.at}</td><td>${p.bt}</td><td id="st-${p.id}">-</td><td id="ct-${p.id}">-</td><td id="tat-${p.id}">-</td><td id="wt-${p.id}">-</td>`;
+          detailTable.appendChild(row);
+        });
+
+        cpuContent.textContent = 'CPU';
+        cpuProgress.style.width = '0%';
+        cpuPopup.style.display = 'none';
+
+        uiInitialized = true;
+      }
+
+      function makeGanttBlock(p){
+        const block = document.createElement('div');
+        block.className = 'gantt-block';
+        block.style.background = p.color;
+        block.style.width = (p.bt * PX_PER_UNIT) + 'px';
+        block.style.opacity = 0;
+        block.textContent = `${p.id}`;
+        return block;
+      }
+
+      function placeTimeMarkerForBlock(blockElem, timeValue){
+        const marker = document.createElement('div');
+        marker.className = 'time-marker';
+        marker.textContent = timeValue;
+        const ganttRect = ganttBar.getBoundingClientRect();
+        const blockRect = blockElem.getBoundingClientRect();
+        const left = Math.round(blockRect.right - ganttRect.left);
+        marker.style.left = left + 'px';
+        timeMarkers.appendChild(marker);
+      }
+
+      function buildTimeline(){
+        if(!uiInitialized) initUI();
+        if(mainTl){ try{ mainTl.kill(); }catch(e){} }
+        mainTl = gsap.timeline({paused:true});
+
+        scheduled.forEach(p => {
+          const appearAt = p.at * (SCALE_MS/1000);
+          const card = safeGet('card-' + p.id);
+          if(!card){
+            const fallback = document.createElement('div');
+            fallback.className = 'process-card';
+            fallback.id = 'card-' + p.id;
+            fallback.style.background = p.color;
+            fallback.innerHTML = `<div style="font-weight:700">${p.id}</div><div style="font-size:12px">AT:${p.at} BT:${p.bt}</div>`;
+            readyZone.appendChild(fallback);
+          }
+          mainTl.to('#card-' + p.id, {duration:0.25, opacity:1, ease:'power1.out'}, appearAt);
+        });
+
+        scheduled.forEach(p => {
+          const startAt = p.st * (SCALE_MS/1000);
+          const finishAt = p.ct * (SCALE_MS/1000);
+          const btDur = p.bt * (SCALE_MS/1000);
+
+          mainTl.addLabel('start-' + p.id, startAt);
+
+          mainTl.add(() => {
+            const card = safeGet('card-' + p.id);
+            if(!card) return;
+            const rect = card.getBoundingClientRect();
+            const bodyRect = document.body.getBoundingClientRect();
+            const clone = card.cloneNode(true);
+            clone.id = 'clone-' + p.id;
+            clone.style.position = 'absolute';
+            clone.style.left = (rect.left - bodyRect.left) + 'px';
+            clone.style.top = (rect.top - bodyRect.top) + 'px';
+            clone.style.width = rect.width + 'px';
+            clone.style.height = rect.height + 'px';
+            clone.style.zIndex = 9999;
+            clone.style.margin = '0';
+            document.body.appendChild(clone);
+            const cpuRect = cpuBox.getBoundingClientRect();
+            const destX = cpuRect.left + (cpuRect.width/2) - (rect.width/2) - bodyRect.left;
+            const destY = cpuRect.top + (cpuRect.height/2) - (rect.height/2) - bodyRect.top;
+            gsap.to(clone, {duration:0.6, x: destX - (rect.left - bodyRect.left), y: destY - (rect.top - bodyRect.top), ease:'power2.inOut', onComplete: ()=>{
+              cpuBox.classList.add('glow');
+              cpuContent.textContent = p.id + ' (running)';
+              cpuPopup.style.display = 'block';
+              cpuPopup.textContent = `${p.id} Running — BT=${p.bt}`;
+              gsap.fromTo(cpuProgress, {width:'0%'}, {width:'100%', duration: btDur, ease:'linear'});
+            }});
+          }, 'start-' + p.id);
+
+          mainTl.add(() => {
+            const clone = safeGet('clone-' + p.id);
+            if(!clone){
+              cpuBox.classList.remove('glow');
+              cpuContent.textContent = 'CPU';
+              cpuProgress.style.width = '0%';
+              const directBlock = makeGanttBlock(p);
+              directBlock.style.opacity = 1;
+              ganttTrack.appendChild(directBlock);
+              placeTimeMarkerForBlock(directBlock, p.ct);
+              safeSetText('st-' + p.id, p.st);
+              safeSetText('ct-' + p.id, p.ct);
+              safeSetText('tat-' + p.id, p.tat);
+              safeSetText('wt-' + p.id, p.wt);
+              const popup = cpuPopup;
+              popup.style.display = 'block';
+              popup.textContent = `${p.id} Finished ✅ CT=${p.ct}, TAT=${p.tat}, WT=${p.wt}`;
+              gsap.fromTo(popup, {opacity:0, y:-8}, {opacity:1, y:0, duration:0.25});
+              gsap.to(popup, {opacity:0, delay:1.1, duration:0.5, onComplete: ()=>{popup.style.display='none'}});
+              return;
+            }
+
+            const finalBlock = makeGanttBlock(p);
+            finalBlock.style.visibility = 'hidden';
+            finalBlock.style.opacity = 0;
+            ganttTrack.appendChild(finalBlock);
+
+            const blockRect = finalBlock.getBoundingClientRect();
+            const ganttRect = ganttBar.getBoundingClientRect();
+            const bodyRect = document.body.getBoundingClientRect();
+            const targetX = blockRect.left - bodyRect.left;
+            const targetY = blockRect.top - bodyRect.top;
+            const currentRect = clone.getBoundingClientRect();
+            const dx = targetX - (currentRect.left - bodyRect.left);
+            const dy = targetY - (currentRect.top - bodyRect.top);
+
+            gsap.to(clone, {duration:0.6, x: dx, y: dy, ease:'power2.inOut', onComplete: ()=>{
+              finalBlock.style.visibility = 'visible';
+              finalBlock.style.opacity = 1;
+              try{ clone.remove(); }catch(e){}
+              cpuBox.classList.remove('glow');
+              cpuContent.textContent = 'CPU';
+              cpuProgress.style.width = '0%';
+              placeTimeMarkerForBlock(finalBlock, p.ct);
+              safeSetText('st-' + p.id, p.st);
+              safeSetText('ct-' + p.id, p.ct);
+              safeSetText('tat-' + p.id, p.tat);
+              safeSetText('wt-' + p.id, p.wt);
+              const popup = cpuPopup;
+              popup.style.display = 'block';
+              popup.textContent = `${p.id} Finished ✅ CT=${p.ct}, TAT=${p.tat}, WT=${p.wt}`;
+              gsap.fromTo(popup, {opacity:0, y:-8}, {opacity:1, y:0, duration:0.25});
+              gsap.to(popup, {opacity:0, delay:1.1, duration:0.5, onComplete: ()=>{popup.style.display='none'}});
+            }});
+
+          }, p.ct * (SCALE_MS/1000));
+
+        });
+
+        const lastCt = scheduled[scheduled.length-1].ct;
+        mainTl.add(()=>{
+          const avgTAT = (scheduled.reduce((s,x)=>s+x.tat,0)/scheduled.length).toFixed(2);
+          const avgWT = (scheduled.reduce((s,x)=>s+x.wt,0)/scheduled.length).toFixed(2);
+          safeSetText('avgTAT', avgTAT);
+          safeSetText('avgWT', avgWT);
+          safeSetText('makespan', lastCt);
+          safeSetText('throughput', (scheduled.length / lastCt).toFixed(3));
+          gsap.fromTo(detailTable, {opacity:0}, {opacity:1, duration:0.6});
+        }, lastCt * (SCALE_MS/1000) + 0.25);
+
+        return mainTl;
+      }
+
+      playBtn.addEventListener('click', ()=>{
+        if(!uiInitialized) initUI();
+        if(!mainTl) mainTl = buildTimeline();
+        try{ mainTl.play(); }catch(e){ console.error(e); }
+      });
+
+      pauseBtn.addEventListener('click', ()=>{ if(mainTl) mainTl.pause(); });
+
+      restartBtn.addEventListener('click', ()=>{
+        try{ if(mainTl) mainTl.kill(); }catch(e){}
+        document.querySelectorAll('[id^="clone-"]').forEach(n=>n.remove());
+        initUI();
+        mainTl = buildTimeline();
+        mainTl.play(0);
+      });
+
+      initUI();
+      mainTl = buildTimeline();
+
+      window.addEventListener('error', (ev)=>{ console.error('Runtime error:', ev.error || ev.message, ev); });
+    });
+  </script>
+</body>
+</html>
